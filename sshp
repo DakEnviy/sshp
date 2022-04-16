@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+
+OPENSSL_ENC_FLAGS=("-des3" "-base64" "-pbkdf2")
+
+show_help() {
+    cat <<EOF
+
+USAGE:
+    ${0##*/} [option] [name] [ssh options]
+
+DESCRIPTION:
+    A wrapper for ssh for simple access via password
+
+OPTIONS:
+    Show this message
+        --help
+
+    Add new credentials
+        --add name destination[:port] password [identity_file]
+
+    Remove credentials
+        --remove name
+
+    List credentials
+        --list
+
+    Disable copying password to clipboard
+        --clipoff
+EOF
+}
+
+add_creds() {
+    if [[ $# -lt 3 ]]; then
+        show_help
+        exit 1
+    fi
+
+    creds_name="$1"
+    dest_port="$2"
+    pass="$3"
+    ident_filepath="$4"
+
+    meta_filepath="$HOME/.ssh/meta/$creds_name"
+
+    if [[ -f "$meta_filepath" ]]; then
+        echo "Credentials $creds_name is already exist" >&2
+        exit 1
+    fi
+
+    read -sp 'Enter passphrase: ' passphrase && echo
+    passenc=$(echo "$pass" | openssl enc -e "${OPENSSL_ENC_FLAGS[@]}" -pass "pass:$passphrase")
+
+    if [[ -z "$ident_filepath" ]]; then
+        meta="$dest_port $passenc"
+    else
+        meta="$dest_port $passenc $ident_filepath"
+    fi
+
+    echo "$meta" > "$meta_filepath" && \
+    chmod 600 "$meta_filepath" && \
+    echo "Credentials $creds_name was successfully added"
+}
+
+remove_creds() {
+    if [[ $# -lt 1 ]]; then
+        show_help
+        exit 1
+    fi
+
+    creds_name="$1"
+
+    meta_filepath="$HOME/.ssh/meta/$creds_name"
+
+    if [[ ! -f "$meta_filepath" ]]; then
+        echo "Credentials $creds_name is not exist" >&2
+        exit 1
+    fi
+
+    rm "$meta_filepath" && \
+    echo "Credentials $creds_name was successfully removed"
+}
+
+list_creds() {
+    for meta_filepath in $HOME/.ssh/meta/*; do
+        [[ -f "$meta_filepath" ]] || continue
+
+        creds_name=$(basename "$meta_filepath")
+
+        echo -n "$creds_name "
+        cat "$meta_filepath" | cut -d ' ' -f 1
+    done | column -t
+}
+
+connect() {
+    clipoff=0
+
+    if [[ "$1" == "--clipoff" ]]; then
+        clipoff=1
+        shift
+    fi
+
+    creds_name="$1"
+    meta_filepath="$HOME/.ssh/meta/$creds_name"
+
+    if [[ -z "$creds_name" || ! -f "$meta_filepath" ]]; then
+        ssh "$@"
+        exit
+    fi
+
+    shift
+    ssh_params=("$@")
+
+    meta=$(cat "$meta_filepath")
+    dest_port=$(echo "$meta" | cut -d ' ' -f 1)
+    passenc=$(echo "$meta" | cut -d ' ' -f 2)
+    ident_filepath=$(echo "$meta" | cut -d ' ' -f 3)
+    dest=$(echo "$dest_port" | cut -d ':' -f 1)
+    port=$(echo "$dest_port" | cut -d ':' -f 2)
+
+    tries=0
+
+    while :; do
+        read -sp "$creds_name's passphrase: " passphrase && echo
+        pass=$(echo "$passenc" | openssl enc -d "${OPENSSL_ENC_FLAGS[@]}" -pass "pass:$passphrase" 2>&1)
+        (( ++tries ))
+
+        [[ "$pass" != *"bad decrypt"* ]] && break
+
+        echo 'Permission denied, please try again.' >&2
+        [[ $tries -ge 3 ]] && exit 1
+    done
+
+    if [[ -n "$ident_filepath" ]]; then
+        ssh_params+=("-i" "$ident_filepath")
+    fi
+
+    if [[ "$dest" != "$port" ]]; then
+        ssh_params+=("-p" "$port")
+    fi
+
+    if [[ $clipoff -ne 1 ]]; then
+        echo -n "$pass" | xclip -selection clipboard
+    fi
+
+    sshpass -p "$pass" ssh "${ssh_params[@]}" "$dest"
+}
+
+case "$1" in
+    --help)
+        show_help
+        ;;
+    --add)
+        shift
+        add_creds "$@"
+        ;;
+    --remove)
+        shift
+        remove_creds "$@"
+        ;;
+    --list)
+        list_creds
+        ;;
+    *)
+        connect "$@"
+        ;;
+esac
