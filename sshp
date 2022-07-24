@@ -173,7 +173,12 @@ connect() {
         echo -n "$pass" | xclip -selection clipboard
     fi
 
-    sshpass -p "$pass" ssh "${ssh_params[@]}" "$dest"
+    # If ident file is provided connect without sshpass to catch key passphrase if needed
+    if [[ -n "$ident_filepath" ]]; then
+        ssh "${ssh_params[@]}" "$dest"
+    else
+        sshpass -p "$pass" ssh "${ssh_params[@]}" "$dest"
+    fi
 }
 
 case "$1" in
