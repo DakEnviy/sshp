@@ -175,7 +175,7 @@ connect() {
     fi
 
     # Check if authentication should be via pubkey
-    if ssh -v -o BatchMode=yes "${ssh_params[@]}" "$dest" 2>&1 | grep -q "Server accepts key"; then
+    if ssh -v -o BatchMode=yes "${ssh_params[@]}" "$dest" 'exit' 2>&1 | grep -q "Server accepts key"; then
         ssh "${ssh_params[@]}" "$dest"
     else
         sshpass -p "$pass" ssh "${ssh_params[@]}" "$dest"
